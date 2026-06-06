@@ -13,6 +13,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 from engine import run_backtest
+from exporters import export_kept_strategy_artifacts
 from project_config import CONFIG
 from strategy import StrategyConfig
 
@@ -50,54 +51,6 @@ def short_head() -> str:
     if result.returncode != 0:
         raise RuntimeError(result.stderr)
     return result.stdout.strip()
-
-
-def export_kept_strategy(rank: int, commit: str, description: str, strategy: StrategyConfig, result: dict) -> None:
-    folder = KEPT_DIR / f"{rank:03d}_{result['return_pct']:.4f}_return"
-    folder.mkdir(parents=True, exist_ok=True)
-    show = run(["git", "show", f"{commit}:strategy.py"])
-    if show.returncode != 0:
-        raise RuntimeError(show.stderr)
-    (folder / "strategy.py").write_text(show.stdout)
-    (folder / "README.md").write_text(
-        f"""# Kept Strategy {rank:03d}
-
-Commit: `{commit}`
-
-Description: {description}
-
-## Results
-
-| Metric | Value |
-| --- | ---: |
-| Return | {result['return_pct']:.4f}% |
-| Max drawdown | {result['max_drawdown_pct']:.4f}% |
-| Net PnL | {result['net_pnl']:.2f} |
-| Trades | {result['num_trades']} |
-| Win rate | {result['win_rate_pct']:.2f}% |
-| Profit factor | {result['profit_factor']:.4f} |
-
-## Project Settings
-
-| Setting | Value |
-| --- | --- |
-| Strategy | {CONFIG.strategy_name} |
-| Symbol | {CONFIG.symbol} |
-| Compare | {CONFIG.compare_symbol} |
-| Period | {CONFIG.start_date} to {CONFIG.end_date} |
-| Timeframe | {CONFIG.timeframe} |
-| Allocation | {CONFIG.allocation:.0f} |
-| Opening range minutes | {CONFIG.opening_range_minutes} |
-| Breakout start | {CONFIG.breakout_start} |
-| Square-off time | {CONFIG.square_off_time} |
-
-## Strategy Parameters
-
-```python
-{asdict(strategy)}
-```
-"""
-    )
 
 
 def generate_candidates() -> list[tuple[str, dict[str, object]]]:
@@ -154,7 +107,7 @@ def main() -> None:
             best_return = result["return_pct"]
             best_dd = result["max_drawdown_pct"]
             kept_rank += 1
-            export_kept_strategy(kept_rank, chash, description, strategy, result)
+            export_kept_strategy_artifacts(kept_rank, chash, description, strategy, result)
             run(["git", "add", "results.tsv", "kept_strategies"]).check_returncode()
             run(["git", "commit", "-m", f"Export kept strategy {kept_rank:03d}"]).check_returncode()
         else:

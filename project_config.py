@@ -55,6 +55,21 @@ class ProjectConfig:
 
     # Execution assumptions
     cost_bps: float = 3.0
+    candle_timestamp: str = "open"  # open or close
+    signal_evaluation_mode: str = "intrabar"  # intrabar or candle_close
+    entry_execution_mode: str = "trigger"  # trigger, close, next_open
+    same_candle_stop_target_policy: str = "stop_first"
+    block_same_candle_reentry: bool = True
+    allow_indicator_nan_trades: bool = False
+    gap_through_stop_uses_open: bool = True
+    entry_slippage_bps: float = 0.0
+    stop_slippage_bps: float = 0.0
+    target_slippage_bps: float = 0.0
+    squareoff_slippage_bps: float = 0.0
+    max_trades_per_day: int | None = None
+    daily_loss_limit_pct: float | None = None
+    block_after_daily_loss: bool = True
+    min_trades_for_goal: int = 0
 
     def symbol_path(self) -> Path:
         return ROOT / self.symbol_csv

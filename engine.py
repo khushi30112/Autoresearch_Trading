@@ -147,6 +147,13 @@ def _opening_range(day: pd.DataFrame) -> tuple[float, float] | None:
 
 
 def _allowed(row: pd.Series, direction: str, strategy: Any, day_open: float) -> bool:
+    def value_ok(value: Any, active: bool) -> bool:
+        if not active:
+            return True
+        if pd.notna(value):
+            return True
+        return CONFIG.allow_indicator_nan_trades
+
     if strategy.avoid_open_beyond_prev_day:
         prev_high = row.get("prev_day_high")
         prev_low = row.get("prev_day_low")
@@ -154,29 +161,54 @@ def _allowed(row: pd.Series, direction: str, strategy: Any, day_open: float) -> 
             return False
         if pd.notna(prev_low) and day_open < prev_low:
             return False
+    adx_active = strategy.adx_min > 0
+    if not value_ok(row.get("adx14"), adx_active):
+        return False
     if pd.notna(row.get("adx14")) and row["adx14"] < strategy.adx_min:
+        return False
+    atr_active = strategy.atr_pct_min > 0 or strategy.atr_pct_max < 999
+    if not value_ok(row.get("atr_pct"), atr_active):
         return False
     if pd.notna(row.get("atr_pct")):
         if row["atr_pct"] < strategy.atr_pct_min or row["atr_pct"] > strategy.atr_pct_max:
             return False
+    volume_active = strategy.volume_ratio_min > 0
+    if not value_ok(row.get("volume_ratio"), volume_active):
+        return False
     if pd.notna(row.get("volume_ratio")) and row["volume_ratio"] < strategy.volume_ratio_min:
         return False
 
     slope = row.get("slope12")
     rel = row.get("rel_strength")
     if direction == "long":
+        if strategy.use_dmi and (
+            not value_ok(row.get("plus_di14"), True) or not value_ok(row.get("minus_di14"), True)
+        ):
+            return False
         if strategy.use_dmi and row.get("plus_di14", 0) <= row.get("minus_di14", 0):
             return False
+        if not value_ok(slope, strategy.long_slope_min > -999):
+            return False
         if pd.notna(slope) and slope < strategy.long_slope_min:
+            return False
+        if not value_ok(rel, CONFIG.compare_symbol is not None and strategy.long_rel_strength_min > -999):
             return False
         if pd.notna(rel) and rel < strategy.long_rel_strength_min:
             return False
         if strategy.ema_filter and row["close"] < row["ema20"]:
             return False
     else:
+        if strategy.use_dmi and (
+            not value_ok(row.get("plus_di14"), True) or not value_ok(row.get("minus_di14"), True)
+        ):
+            return False
         if strategy.use_dmi and row.get("minus_di14", 0) <= row.get("plus_di14", 0):
             return False
+        if not value_ok(slope, strategy.short_slope_min > -999):
+            return False
         if pd.notna(slope) and slope > -strategy.short_slope_min:
+            return False
+        if not value_ok(rel, CONFIG.compare_symbol is not None and strategy.short_rel_strength_min > -999):
             return False
         if pd.notna(rel) and rel > -strategy.short_rel_strength_min:
             return False
@@ -215,6 +247,70 @@ def _trail(direction: str, stop: float, row: pd.Series, strategy: Any) -> float:
     return max(stop, candidate) if direction == "long" else min(stop, candidate)
 
 
+def _slippage(price: float, direction: str, event: str) -> float:
+    bps = {
+        "entry": CONFIG.entry_slippage_bps,
+        "stop": CONFIG.stop_slippage_bps,
+        "target": CONFIG.target_slippage_bps,
+        "squareoff": CONFIG.squareoff_slippage_bps,
+    }.get(event, 0.0)
+    if bps == 0:
+        return float(price)
+    multiplier = bps / 10000
+    if event == "entry":
+        return float(price) * (1 + multiplier if direction == "long" else 1 - multiplier)
+    return float(price) * (1 - multiplier if direction == "long" else 1 + multiplier)
+
+
+def _stop_fill(raw_stop: float, row: pd.Series, direction: str) -> float:
+    if not CONFIG.gap_through_stop_uses_open:
+        return raw_stop
+    if direction == "long" and row["open"] < raw_stop:
+        return float(row["open"])
+    if direction == "short" and row["open"] > raw_stop:
+        return float(row["open"])
+    return raw_stop
+
+
+def _entry_from_mode(
+    row: pd.Series,
+    day: pd.DataFrame,
+    row_index: int,
+    trigger: float,
+    direction: str,
+    strategy_entry_price: str,
+) -> tuple[float, str] | None:
+    mode = CONFIG.entry_execution_mode
+    if strategy_entry_price == "close" and mode == "trigger":
+        mode = "close"
+    if mode == "trigger":
+        raw = trigger if direction == "long" else trigger
+        if direction == "long" and row["open"] > trigger:
+            raw = float(row["open"])
+        if direction == "short" and row["open"] < trigger:
+            raw = float(row["open"])
+        return _slippage(raw, direction, "entry"), str(row["time"])
+    if mode == "close":
+        return _slippage(float(row["close"]), direction, "entry"), str(row["time"])
+    if mode == "next_open":
+        if row_index + 1 >= len(day):
+            return None
+        next_row = day.iloc[row_index + 1]
+        next_time = pd.Timestamp(next_row["time"]).time()
+        if next_time >= pd.Timestamp(CONFIG.square_off_time).time():
+            return None
+        return _slippage(float(next_row["open"]), direction, "entry"), str(next_row["time"])
+    raise ValueError(f"Unsupported entry_execution_mode: {mode}")
+
+
+def _breakout_hit(row: pd.Series, trigger: float, direction: str) -> bool:
+    if CONFIG.signal_evaluation_mode == "candle_close":
+        return bool(row["close"] > trigger) if direction == "long" else bool(row["close"] < trigger)
+    if CONFIG.signal_evaluation_mode == "intrabar":
+        return bool(row["high"] > trigger) if direction == "long" else bool(row["low"] < trigger)
+    raise ValueError(f"Unsupported signal_evaluation_mode: {CONFIG.signal_evaluation_mode}")
+
+
 def run_backtest(strategy: Any) -> dict[str, Any]:
     if CONFIG.max_open_positions != 1:
         raise ValueError("This engine currently supports max_open_positions = 1.")
@@ -238,9 +334,13 @@ def run_backtest(strategy: Any) -> dict[str, Any]:
         day_open = float(day.loc[0, "open"])
         long_entries = 0
         short_entries = 0
+        daily_trades = 0
+        daily_realized_pnl = 0.0
+        new_trades_blocked = False
+        last_exit_row_index: int | None = None
         position: dict[str, Any] | None = None
 
-        for _, row in day.iterrows():
+        for row_index, row in day.iterrows():
             row_time = pd.Timestamp(row["time"]).time()
             if row_time < breakout_time:
                 continue
@@ -255,14 +355,14 @@ def run_backtest(strategy: Any) -> dict[str, Any]:
 
                 if direction == "long":
                     if row["low"] <= stop:
-                        exit_price = stop
+                        exit_price = _stop_fill(stop, row, direction)
                         exit_reason = "stop"
                     elif target is not None and row["high"] >= target:
                         exit_price = target
                         exit_reason = "target"
                 else:
                     if row["high"] >= stop:
-                        exit_price = stop
+                        exit_price = _stop_fill(stop, row, direction)
                         exit_reason = "stop"
                     elif target is not None and row["low"] <= target:
                         exit_price = target
@@ -273,6 +373,7 @@ def run_backtest(strategy: Any) -> dict[str, Any]:
                     exit_reason = "squareoff"
 
                 if exit_price is not None:
+                    exit_price = _slippage(float(exit_price), direction, str(exit_reason))
                     qty = position["qty"]
                     gross = (exit_price - position["entry_price"]) * qty
                     if direction == "short":
@@ -280,6 +381,7 @@ def run_backtest(strategy: Any) -> dict[str, Any]:
                     costs = (position["entry_price"] + exit_price) * qty * CONFIG.cost_bps / 10000
                     pnl = gross - costs
                     equity += pnl
+                    daily_realized_pnl += pnl
                     equity_curve.append(equity)
                     trades.append(
                         {
@@ -295,8 +397,20 @@ def run_backtest(strategy: Any) -> dict[str, Any]:
                         }
                     )
                     position = None
+                    daily_trades += 1
+                    last_exit_row_index = row_index
+                    if (
+                        CONFIG.daily_loss_limit_pct is not None
+                        and CONFIG.block_after_daily_loss
+                        and daily_realized_pnl <= -CONFIG.allocation * CONFIG.daily_loss_limit_pct / 100
+                    ):
+                        new_trades_blocked = True
 
-            if position is not None or row_time >= square_off_time:
+            if position is not None or row_time >= square_off_time or new_trades_blocked:
+                continue
+            if CONFIG.max_trades_per_day is not None and daily_trades >= CONFIG.max_trades_per_day:
+                continue
+            if CONFIG.block_same_candle_reentry and last_exit_row_index == row_index:
                 continue
 
             atr = row["atr14"] if pd.notna(row.get("atr14")) else 0.0
@@ -304,14 +418,19 @@ def run_backtest(strategy: Any) -> dict[str, Any]:
             long_trigger = orb_high + buffer_abs
             short_trigger = orb_low - buffer_abs
 
-            if CONFIG.allow_long and long_entries < strategy.max_reentries and row["high"] > long_trigger:
+            if CONFIG.allow_long and long_entries < strategy.max_reentries and _breakout_hit(row, long_trigger, "long"):
                 if _allowed(row, "long", strategy, day_open):
-                    entry = long_trigger if strategy.entry_price == "trigger" else float(row["close"])
+                    entry_result = _entry_from_mode(row, day, row_index, long_trigger, "long", strategy.entry_price)
+                    if entry_result is None:
+                        continue
+                    entry, entry_time = entry_result
                     qty = int(CONFIG.allocation // entry)
+                    if qty <= 0:
+                        continue
                     stop = _initial_stop("long", entry, orb_high, orb_low, row, strategy)
                     position = {
                         "direction": "long",
-                        "entry_time": row["time"],
+                        "entry_time": entry_time,
                         "entry_price": entry,
                         "qty": qty,
                         "stop": stop,
@@ -320,14 +439,19 @@ def run_backtest(strategy: Any) -> dict[str, Any]:
                     long_entries += 1
                     continue
 
-            if CONFIG.allow_short and short_entries < strategy.max_reentries and row["low"] < short_trigger:
+            if CONFIG.allow_short and short_entries < strategy.max_reentries and _breakout_hit(row, short_trigger, "short"):
                 if _allowed(row, "short", strategy, day_open):
-                    entry = short_trigger if strategy.entry_price == "trigger" else float(row["close"])
+                    entry_result = _entry_from_mode(row, day, row_index, short_trigger, "short", strategy.entry_price)
+                    if entry_result is None:
+                        continue
+                    entry, entry_time = entry_result
                     qty = int(CONFIG.allocation // entry)
+                    if qty <= 0:
+                        continue
                     stop = _initial_stop("short", entry, orb_high, orb_low, row, strategy)
                     position = {
                         "direction": "short",
-                        "entry_time": row["time"],
+                        "entry_time": entry_time,
                         "entry_price": entry,
                         "qty": qty,
                         "stop": stop,
@@ -337,7 +461,7 @@ def run_backtest(strategy: Any) -> dict[str, Any]:
 
         if position is not None:
             row = day.iloc[-1]
-            exit_price = float(row["close"])
+            exit_price = _slippage(float(row["close"]), position["direction"], "squareoff")
             qty = position["qty"]
             gross = (exit_price - position["entry_price"]) * qty
             if position["direction"] == "short":
@@ -375,6 +499,7 @@ def run_backtest(strategy: Any) -> dict[str, Any]:
 
     return_pct = total_pnl / CONFIG.allocation * 100
     max_dd = float(drawdown.max()) if len(drawdown) else 0.0
+    enough_trades = len(trades) >= CONFIG.min_trades_for_goal
     return {
         "return_pct": return_pct,
         "max_drawdown_pct": max_dd,
@@ -386,7 +511,7 @@ def run_backtest(strategy: Any) -> dict[str, Any]:
         "win_rate_pct": wins / len(trades) * 100 if trades else 0.0,
         "profit_factor": gross_profit / gross_loss if gross_loss else (np.inf if gross_profit else 0.0),
         "symbol_buy_hold_pct": float(symbol_buy_hold),
-        "goal_pass": return_pct >= CONFIG.min_return_pct and max_dd <= CONFIG.max_drawdown_pct,
+        "goal_pass": enough_trades and return_pct >= CONFIG.min_return_pct and max_dd <= CONFIG.max_drawdown_pct,
         "project": asdict(CONFIG),
         "config": asdict(strategy),
         "trades": trades,
