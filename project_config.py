@@ -56,8 +56,8 @@ class ProjectConfig:
     # Execution assumptions
     cost_bps: float = 3.0
     candle_timestamp: str = "open"  # open or close
-    signal_evaluation_mode: str = "intrabar"  # intrabar or candle_close
-    entry_execution_mode: str = "trigger"  # trigger, close, next_open
+    signal_evaluation_mode: str = "candle_close"  # intrabar or candle_close
+    entry_execution_mode: str = "next_open"  # trigger, close, next_open
     same_candle_stop_target_policy: str = "stop_first"
     block_same_candle_reentry: bool = True
     allow_indicator_nan_trades: bool = False
