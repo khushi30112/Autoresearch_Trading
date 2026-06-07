@@ -53,6 +53,25 @@ def short_head() -> str:
     return result.stdout.strip()
 
 
+def score_result(result: dict[str, object]) -> float:
+    return_pct = float(result["return_pct"])
+    drawdown = float(result["max_drawdown_pct"])
+    trades = int(result["num_trades"])
+    win_rate = float(result["win_rate_pct"])
+    profit_factor = min(float(result["profit_factor"]), 10.0)
+    goal_bonus = 1000.0 if result["goal_pass"] else 0.0
+    return (
+        goal_bonus
+        + return_pct * 12.0
+        - max(0.0, CONFIG.min_return_pct - return_pct) * 18.0
+        - drawdown * 7.5
+        - max(0.0, drawdown - CONFIG.max_drawdown_pct) * 25.0
+        + min(trades, 80) * 0.20
+        + win_rate * 0.05
+        + profit_factor * 1.50
+    )
+
+
 def generate_candidates() -> list[tuple[str, dict[str, object]]]:
     return [
         ("baseline", {}),
@@ -71,11 +90,10 @@ def generate_candidates() -> list[tuple[str, dict[str, object]]]:
 
 def main() -> None:
     if not RESULTS.exists():
-        RESULTS.write_text("commit\treturn_pct\tmax_drawdown_pct\tstatus\tdescription\n")
+        RESULTS.write_text("commit\treturn_pct\tmax_drawdown_pct\tscore\tstatus\tdescription\n")
     KEPT_DIR.mkdir(exist_ok=True)
 
-    best_return = float("-inf")
-    best_dd = float("inf")
+    best_score = float("-inf")
     kept_rank = len([p for p in KEPT_DIR.iterdir() if p.is_dir()])
     base = asdict(StrategyConfig())
 
@@ -95,17 +113,17 @@ def main() -> None:
 
         strategy = StrategyConfig(**values)
         result = run_backtest(strategy)
-        improved = result["goal_pass"] and (
-            result["return_pct"] > best_return
-            or (result["return_pct"] == best_return and result["max_drawdown_pct"] < best_dd)
-        )
+        result_score = score_result(result)
+        improved = result["goal_pass"] and result_score > best_score
         status = "keep" if improved else "discard"
         with RESULTS.open("a", newline="") as f:
-            f.write(f"{chash}\t{result['return_pct']:.4f}\t{result['max_drawdown_pct']:.4f}\t{status}\t{description}\n")
+            f.write(
+                f"{chash}\t{result['return_pct']:.4f}\t{result['max_drawdown_pct']:.4f}\t"
+                f"{result_score:.4f}\t{status}\t{description}\n"
+            )
 
         if improved:
-            best_return = result["return_pct"]
-            best_dd = result["max_drawdown_pct"]
+            best_score = result_score
             kept_rank += 1
             export_kept_strategy_artifacts(kept_rank, chash, description, strategy, result)
             run(["git", "add", "results.tsv", "kept_strategies"]).check_returncode()

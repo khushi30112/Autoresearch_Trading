@@ -48,6 +48,7 @@ def _load_csv(path: Path, cfg: ProjectConfig) -> pd.DataFrame:
     )
     df["datetime"] = pd.to_datetime(df["date"].astype(str) + " " + df["time"].astype(str))
     df["date"] = pd.to_datetime(df["date"]).dt.date
+    df["time_obj"] = pd.to_datetime(df["time"].astype(str), format="%H:%M:%S").dt.time
     for col in ["open", "high", "low", "close", "volume"]:
         df[col] = pd.to_numeric(df[col], errors="coerce")
     df = df.dropna(subset=["datetime", "open", "high", "low", "close"])
@@ -140,7 +141,7 @@ def _opening_range(day: pd.DataFrame) -> tuple[float, float] | None:
     start = pd.Timestamp(CONFIG.session_start).time()
     end_dt = pd.Timestamp(CONFIG.session_start) + pd.Timedelta(minutes=CONFIG.opening_range_minutes)
     end = end_dt.time()
-    opening = day[(pd.to_datetime(day["time"]).dt.time >= start) & (pd.to_datetime(day["time"]).dt.time < end)]
+    opening = day[(day["time_obj"] >= start) & (day["time_obj"] < end)]
     if opening.empty:
         return None
     return float(opening["high"].max()), float(opening["low"].min())
@@ -296,7 +297,7 @@ def _entry_from_mode(
         if row_index + 1 >= len(day):
             return None
         next_row = day.iloc[row_index + 1]
-        next_time = pd.Timestamp(next_row["time"]).time()
+        next_time = next_row["time_obj"]
         if next_time >= pd.Timestamp(CONFIG.square_off_time).time():
             return None
         return _slippage(float(next_row["open"]), direction, "entry"), str(next_row["time"])
@@ -341,7 +342,7 @@ def run_backtest(strategy: Any) -> dict[str, Any]:
         position: dict[str, Any] | None = None
 
         for row_index, row in day.iterrows():
-            row_time = pd.Timestamp(row["time"]).time()
+            row_time = row["time_obj"]
             if row_time < breakout_time:
                 continue
 

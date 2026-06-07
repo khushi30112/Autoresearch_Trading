@@ -43,12 +43,9 @@ Autoresearch_Trading/
   kept_strategies/
     README.md
     <rank>_<return>_return/
-      strategy_file/
-        strategy.py
-      readme_file/
-        README.md
-      backtesting_file/
-        <strategy>_Backtest_<rank>.py
+      Strategy_<rank>.py
+      README_<rank>.md
+      <strategy>_Backtest_<rank>.py
 ```
 
 ## File Meaning
@@ -60,8 +57,8 @@ Autoresearch_Trading/
 | `engine.py` | Data loading, indicator calculation, ORB signal logic, trade simulation, costs, drawdown, and metrics. |
 | `backtest.py` | Runs one strategy backtest using current `project_config.py` and `strategy.py`. |
 | `autoresearch.py` | Keep/reject experiment runner. Edits strategy parameters, commits tests, logs results, exports kept strategies, resets rejected commits. |
-| `exporters.py` | Creates the three kept-strategy artifact folders and generated backtesting script. |
-| `results.tsv` | Experiment log with commit, return, drawdown, keep/discard status, and description. |
+| `exporters.py` | Creates direct kept-strategy files and a report-generating backtesting script. |
+| `results.tsv` | Experiment log with commit, return, drawdown, score, keep/discard status, and description. |
 | `data/` | Local OHLCV CSV files. |
 | `docs/WORKFLOW.md` | Detailed operating workflow. |
 | `docs/BACKTESTING_CHECKLIST.md` | Backtesting safety checklist used while evaluating strategies. |
@@ -164,18 +161,15 @@ Every kept strategy is exported like this:
 
 ```text
 kept_strategies/001_18.2500_return/
-  strategy_file/
-    strategy.py
-  readme_file/
-    README.md
-  backtesting_file/
-    Open_Range_Breakout_Backtest_001.py
+  Strategy_001.py
+  README_001.md
+  Open_Range_Breakout_Backtest_001.py
 ```
 
-Use `strategy_file/strategy.py` when you want the exact compact strategy config.
-Use `readme_file/README.md` when you want the full settings and results summary.
-Use `backtesting_file/*.py` when you want a reusable script with all settings in
-one sectioned `CONFIG` block for later backtesting or optimization.
+Use `Strategy_<rank>.py` when you want the exact compact strategy config.
+Use `README_<rank>.md` when you want the full settings and results summary.
+Use `<strategy>_Backtest_<rank>.py` when you want a reusable script with all
+settings in one sectioned `CONFIG` block plus report outputs.
 
 ## Keep / Reject Logic
 

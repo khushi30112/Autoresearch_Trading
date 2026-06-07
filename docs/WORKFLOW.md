@@ -95,14 +95,19 @@ commit, return_pct, max_drawdown_pct, status, description
 Each kept strategy has:
 
 ```text
-strategy_file/strategy.py
-readme_file/README.md
-backtesting_file/<strategy>_Backtest_<rank>.py
+Strategy_<rank>.py
+README_<rank>.md
+<strategy>_Backtest_<rank>.py
 ```
 
 Use the compact strategy file for this project. Use the generated backtesting
-file when you want all settings in one sectioned script for later replay or
-optimization.
+file when you want all settings in one sectioned script for later replay,
+optimization, and report generation.
+
+In generated backtesting files, edit the top `CONFIG` block only. Values such
+as `SYMBOLS`, `SYMBOL_CSV`, `COMPARE_CSV`, `BACKTEST_START_DATE`,
+`BACKTEST_END_DATE`, execution mode, costs, goals, and output settings are read
+from that block at runtime.
 
 ## 7. Change Strategy Ideas Safely
 

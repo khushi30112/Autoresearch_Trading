@@ -3,3 +3,6 @@ __pycache__/
 .venv/
 run.log
 *.tmp
+_*.py
+_*.tsv
+Strategy outputs/
